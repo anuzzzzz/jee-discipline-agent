@@ -1,0 +1,66 @@
+{
+  "physics": {
+    "mechanics": [
+      "kinematics", "newton_laws", "work_energy_power", "circular_motion",
+      "rotational_mechanics", "gravitation", "simple_harmonic_motion",
+      "elasticity", "fluid_mechanics", "surface_tension"
+    ],
+    "thermodynamics": [
+      "thermal_properties", "kinetic_theory", "thermodynamic_processes",
+      "heat_transfer", "calorimetry"
+    ],
+    "electromagnetism": [
+      "electrostatics", "capacitance", "current_electricity",
+      "magnetic_effects", "electromagnetic_induction", "alternating_current"
+    ],
+    "optics": [
+      "ray_optics", "wave_optics", "optical_instruments"
+    ],
+    "modern_physics": [
+      "photoelectric_effect", "atomic_structure", "nuclear_physics",
+      "semiconductors", "communication_systems"
+    ],
+    "waves": [
+      "wave_motion", "sound_waves", "superposition", "doppler_effect"
+    ]
+  },
+  "chemistry": {
+    "physical_chemistry": [
+      "mole_concept", "atomic_structure", "chemical_bonding",
+      "thermodynamics", "equilibrium", "ionic_equilibrium",
+      "electrochemistry", "chemical_kinetics", "surface_chemistry"
+    ],
+    "inorganic_chemistry": [
+      "periodic_table", "s_block", "p_block", "d_block", "f_block",
+      "coordination_compounds", "metallurgy", "qualitative_analysis"
+    ],
+    "organic_chemistry": [
+      "iupac_nomenclature", "isomerism", "reaction_mechanisms",
+      "hydrocarbons", "haloalkanes", "alcohols_phenols",
+      "aldehydes_ketones", "carboxylic_acids", "amines",
+      "polymers", "biomolecules"
+    ]
+  },
+  "mathematics": {
+    "algebra": [
+      "quadratic_equations", "complex_numbers", "sequences_series",
+      "permutations_combinations", "binomial_theorem", "matrices_determinants"
+    ],
+    "calculus": [
+      "limits", "continuity", "differentiation", "applications_derivatives",
+      "indefinite_integration", "definite_integration", "differential_equations"
+    ],
+    "coordinate_geometry": [
+      "straight_lines", "circles", "parabola", "ellipse", "hyperbola"
+    ],
+    "vectors_3d": [
+      "vectors", "3d_geometry"
+    ],
+    "trigonometry": [
+      "trigonometric_functions", "trigonometric_equations", "inverse_trig"
+    ],
+    "probability_statistics": [
+      "probability", "statistics"
+    ]
+  }
+}

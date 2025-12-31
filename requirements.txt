@@ -1,0 +1,31 @@
+# Core
+fastapi
+uvicorn[standard]
+python-dotenv
+httpx
+pydantic
+pydantic-settings
+
+# LangChain / LangGraph
+langgraph
+langchain
+langchain-openai
+
+# Database
+supabase
+asyncpg
+psycopg[binary]
+
+# LLMs
+openai
+anthropic
+
+# Scheduler
+apscheduler
+
+# Utils
+python-multipart
+
+# Ingestion (for local pipeline)
+datasets
+pandas
