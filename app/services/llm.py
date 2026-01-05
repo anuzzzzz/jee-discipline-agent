@@ -327,8 +327,8 @@ INTENTS:
    Examples: "A", "Option B", "I think it's C", "D", "b"
    ONLY valid if has_active_drill is True.
 
-2. "REPORT_MISTAKE" - User is sharing a new mistake/error they made.
-   Examples: "I got Q17 wrong", "I confused torque with force", "Made a sign error"
+2. "REPORT_MISTAKE" - User is reporting a mistake or gap in knowledge.
+   Examples: "I got Q17 wrong", "I confused torque with force", "Made a sign error", "I forgot the formula for X", "I don't understand Y", "I keep mixing up A and B"
 
 3. "START_DRILL" - User wants to practice/drill their mistakes.
    Examples: "GO", "Start", "Let's drill", "Practice", "Quiz me", "Ready"

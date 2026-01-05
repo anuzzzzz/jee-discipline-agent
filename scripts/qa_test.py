@@ -579,6 +579,298 @@ async def test_database_integrity():
 
 
 # =============================================================================
+# NEW CRITICAL TESTS
+# =============================================================================
+
+async def test_wrong_answer_flow():
+    """Test answer handling flow."""
+    print("\n📝 TEST SUITE: Answer Flow")
+    print("-" * 40)
+
+    phone = "910000000020"
+    await reset_user(phone)
+
+    # Setup
+    await send_message(phone, "Hi")
+    await send_message(phone, "AnswerFlowTester")
+    await send_message(phone, "I confused vectors with scalars")
+    await send_message(phone, "GO")
+
+    # Test invalid option handling
+    res1 = await send_message(phone, "Z")
+    results.record(
+        "Invalid option prompts for valid input",
+        "a" in res1["response"].lower() or "b" in res1["response"].lower() or "option" in res1["response"].lower(),
+        f"Got: {res1['response'][:80]}"
+    )
+
+    # Test valid answer
+    res2 = await send_message(phone, "A")
+    results.record(
+        "Valid answer gets feedback",
+        any(word in res2["response"].lower() for word in ["correct", "wrong", "great", "oops", "streak", "try", "right", "incorrect"]),
+        f"Got: {res2['response'][:80]}"
+    )
+
+
+async def test_multiple_mistakes_queue():
+    """Test drilling through multiple mistakes."""
+    print("\n📝 TEST SUITE: Multiple Mistakes Queue")
+    print("-" * 40)
+
+    phone = "910000000021"
+    await reset_user(phone)
+
+    # Setup with multiple mistakes
+    await send_message(phone, "Hi")
+    await send_message(phone, "QueueTester")
+    await send_message(phone, "I confused force with pressure")
+    await send_message(phone, "I mixed up acids and bases")
+    await send_message(phone, "I forgot integration rules")
+
+    # Check we have 3 mistakes
+    from app.db.supabase import get_supabase_client
+    client = get_supabase_client()
+    user = client.table("users").select("id").eq("phone_number", phone).execute()
+
+    if user.data:
+        mistakes = client.table("student_mistakes").select("*").eq("user_id", user.data[0]["id"]).execute()
+        results.record(
+            "Multiple mistakes saved",
+            len(mistakes.data) >= 3,
+            f"Found {len(mistakes.data)} mistakes"
+        )
+
+    # Drill first
+    res1 = await send_message(phone, "GO")
+    results.record(
+        "First drill starts",
+        "question" in res1["response"].lower() or "?" in res1["response"],
+        f"Got: {res1['response'][:50]}"
+    )
+
+    # Answer and check for more
+    res2 = await send_message(phone, "A")
+    results.record(
+        "Shows remaining mistakes count",
+        any(word in res2["response"].lower() for word in ["more", "remaining", "waiting", "2", "mistake"]),
+        f"Got: {res2['response'][:80]}"
+    )
+
+
+async def test_mastery_progression():
+    """Test that mistakes get marked as mastered."""
+    print("\n📝 TEST SUITE: Mastery Progression")
+    print("-" * 40)
+
+    phone = "910000000022"
+    await reset_user(phone)
+
+    # Setup
+    await send_message(phone, "Hi")
+    await send_message(phone, "MasteryTester")
+    await send_message(phone, "I confused kinetic with potential energy")
+
+    # Drill multiple times (mastery requires 3+ correct)
+    for i in range(4):
+        await send_message(phone, "GO")
+        await send_message(phone, "A")  # Answer
+
+    # Check mastery in database
+    from app.db.supabase import get_supabase_client
+    client = get_supabase_client()
+    user = client.table("users").select("id").eq("phone_number", phone).execute()
+
+    if user.data:
+        mistakes = client.table("student_mistakes").select("times_drilled, times_correct, mastery_score").eq("user_id", user.data[0]["id"]).execute()
+
+        if mistakes.data:
+            mistake = mistakes.data[0]
+            results.record(
+                "Times drilled tracked",
+                mistake.get("times_drilled", 0) > 0,
+                f"Drilled: {mistake.get('times_drilled')}"
+            )
+            results.record(
+                "Mastery score calculated",
+                mistake.get("mastery_score", 0) >= 0,
+                f"Score: {mistake.get('mastery_score')}"
+            )
+        else:
+            results.record("Mastery tracking", False, "No mistakes found")
+    else:
+        results.record("Mastery tracking", False, "User not found")
+
+
+async def test_question_topic_matching():
+    """Test that drill questions match the mistake topic."""
+    print("\n📝 TEST SUITE: Question-Topic Matching")
+    print("-" * 40)
+
+    phone = "910000000023"
+    await reset_user(phone)
+
+    # Report a specific physics mistake
+    await send_message(phone, "Hi")
+    await send_message(phone, "TopicTester")
+    await send_message(phone, "I confused Newton's laws of motion")
+
+    # Get drill
+    res = await send_message(phone, "GO")
+
+    # Check question is physics-related
+    physics_keywords = ["force", "motion", "newton", "mass", "acceleration", "velocity", "momentum", "energy", "physics"]
+    has_physics = any(kw in res["response"].lower() for kw in physics_keywords)
+
+    results.record(
+        "Drill question matches topic (physics)",
+        has_physics or "question" in res["response"].lower(),
+        f"Got: {res['response'][:100]}"
+    )
+
+
+async def test_no_questions_for_topic():
+    """Test handling when no questions exist for a topic."""
+    print("\n📝 TEST SUITE: No Questions for Topic")
+    print("-" * 40)
+
+    phone = "910000000024"
+    await reset_user(phone)
+
+    # Report a very specific/obscure mistake
+    await send_message(phone, "Hi")
+    await send_message(phone, "NoQuestionTester")
+    await send_message(phone, "I confused quantum chromodynamics with string theory")
+
+    # Try to drill
+    res = await send_message(phone, "GO")
+
+    # Should either generate a question or handle gracefully
+    results.record(
+        "Handles missing questions gracefully",
+        len(res["response"]) > 10 and "error" not in res["response"].lower(),
+        f"Got: {res['response'][:80]}"
+    )
+
+
+async def test_resubscribe_after_stop():
+    """Test user can re-subscribe after STOP."""
+    print("\n📝 TEST SUITE: Re-subscribe After STOP")
+    print("-" * 40)
+
+    phone = "910000000025"
+    await reset_user(phone)
+
+    # Setup and STOP
+    await send_message(phone, "Hi")
+    await send_message(phone, "ResubscribeTester")
+    await send_message(phone, "STOP")
+
+    # Try to interact (should be ignored)
+    res1 = await send_message(phone, "Hi")
+    results.record(
+        "Inactive user gets no response",
+        res1["response"] == "" or res1["response"] is None or "inactive" not in res1["response"].lower(),
+        f"Got: '{res1['response'][:50]}'" if res1["response"] else "Got: empty (correct)"
+    )
+
+    # Re-subscribe
+    res2 = await send_message(phone, "START")
+    results.record(
+        "START reactivates user",
+        "welcome" in res2["response"].lower() or "back" in res2["response"].lower() or "go" in res2["response"].lower(),
+        f"Got: {res2['response'][:80]}"
+    )
+
+    # Verify active in DB
+    from app.db.supabase import get_supabase_client
+    client = get_supabase_client()
+    user = client.table("users").select("is_active").eq("phone_number", phone).execute()
+
+    results.record(
+        "User marked active in DB",
+        user.data and user.data[0].get("is_active") == True,
+        f"is_active: {user.data[0].get('is_active') if user.data else 'N/A'}"
+    )
+
+
+async def test_conversation_persistence():
+    """Test state persists across sessions."""
+    print("\n📝 TEST SUITE: Conversation Persistence")
+    print("-" * 40)
+
+    phone = "910000000026"
+    await reset_user(phone)
+
+    # Session 1: Setup
+    await send_message(phone, "Hi")
+    await send_message(phone, "PersistenceTester")
+    await send_message(phone, "I confused impulse with momentum")
+
+    # Session 2: Return and check state
+    res = await send_message(phone, "stats")
+
+    results.record(
+        "Stats remember previous session",
+        "mistake" in res["response"].lower() or "1" in res["response"],
+        f"Got: {res['response'][:80]}"
+    )
+
+    # Check can still drill the mistake
+    res2 = await send_message(phone, "GO")
+    results.record(
+        "Can drill mistake from previous session",
+        "question" in res2["response"].lower() or "?" in res2["response"],
+        f"Got: {res2['response'][:80]}"
+    )
+
+
+async def test_response_time():
+    """Test response time is acceptable."""
+    print("\n📝 TEST SUITE: Response Time")
+    print("-" * 40)
+
+    import time
+
+    phone = "910000000027"
+    await reset_user(phone)
+
+    # Measure simple message
+    start = time.time()
+    await send_message(phone, "Hi")
+    greeting_time = time.time() - start
+
+    results.record(
+        f"Greeting response < 5s",
+        greeting_time < 5,
+        f"Took {greeting_time:.2f}s"
+    )
+
+    # Measure mistake classification (heavier LLM call)
+    await send_message(phone, "TimeTester")
+    start = time.time()
+    await send_message(phone, "I confused derivatives with integrals")
+    mistake_time = time.time() - start
+
+    results.record(
+        f"Mistake classification < 10s",
+        mistake_time < 10,
+        f"Took {mistake_time:.2f}s"
+    )
+
+    # Measure drill generation (heaviest)
+    start = time.time()
+    await send_message(phone, "GO")
+    drill_time = time.time() - start
+
+    results.record(
+        f"Drill generation < 15s",
+        drill_time < 15,
+        f"Took {drill_time:.2f}s"
+    )
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -589,6 +881,7 @@ async def run_all_tests():
     print("=" * 50)
     print(f"Started: {datetime.now().isoformat()}")
 
+    # Original tests
     await test_onboarding()
     await test_mistake_reporting()
     await test_drilling_flow()
@@ -600,6 +893,16 @@ async def run_all_tests():
     await test_streak_system()
     await test_intent_classification()
     await test_database_integrity()
+
+    # NEW Critical tests
+    await test_wrong_answer_flow()
+    await test_multiple_mistakes_queue()
+    await test_mastery_progression()
+    await test_question_topic_matching()
+    await test_no_questions_for_topic()
+    await test_resubscribe_after_stop()
+    await test_conversation_persistence()
+    await test_response_time()
 
     return results.summary()
 

@@ -147,8 +147,10 @@ async def route_message(
 
     # Special case: Onboarding (waiting for name)
     if state.get("phase") == "onboarding" and user.name is None:
-        # Check if this looks like a name (not a command)
-        if message.strip().upper() not in ["GO", "STATS", "HELP", "STOP", "START"]:
+        # Check if this looks like a name (not a command or greeting)
+        upper_msg = message.strip().upper()
+        excluded = ["GO", "STATS", "HELP", "STOP", "START", "HI", "HELLO", "HEY", "HOLA", "YO", "SUP", "NAMASTE"]
+        if upper_msg not in excluded and not upper_msg.startswith("HI ") and not upper_msg.startswith("HELLO "):
             return await handle_onboarding(user, state, message, image_url)
 
     # Special case: Active drill - check if answering
@@ -157,6 +159,36 @@ async def route_message(
         first_char = message.strip().upper()[:1]
         if first_char in ["A", "B", "C", "D"]:
             return await handle_answer_drill(user, state, message, image_url)
+
+    # Quick keyword matching for common intents (skip LLM for obvious cases)
+    upper_msg = message.strip().upper()
+    quick_intents = {
+        "GO": "START_DRILL",
+        "LET'S GO": "START_DRILL",
+        "LETS GO": "START_DRILL",
+        "START": "START_DRILL",
+        "BEGIN": "START_DRILL",
+        "PRACTICE": "START_DRILL",
+        "STATS": "CHECK_STATS",
+        "MY STATS": "CHECK_STATS",
+        "PROGRESS": "CHECK_STATS",
+        "HELP": "HELP",
+        "STOP": "STOP",
+        "UNSUBSCRIBE": "STOP",
+    }
+
+    if upper_msg in quick_intents:
+        intent = quick_intents[upper_msg]
+        state["last_intent"] = intent
+        handlers = {
+            "START_DRILL": handle_start_drill,
+            "CHECK_STATS": handle_stats,
+            "HELP": handle_help,
+            "STOP": handle_stop,
+        }
+        handler = handlers.get(intent)
+        if handler:
+            return await handler(user, state, message, image_url)
 
     # Classify intent using LLM
     pending = await get_pending_mistakes_count(user.id)
