@@ -2,175 +2,279 @@
 JEEBench Dataset Loader
 
 Loads questions from the JEEBench dataset on HuggingFace.
-Dataset: https://huggingface.co/datasets/daman1209arora/jeebench
-
-Actual dataset format:
-- subject: "phy", "chem", "math"
-- description: "JEE Adv 2016 Paper 1"
-- gold: "A", "B", "C", or "D"
-- index: question number
-- type: "MCQ", etc.
-- question: Full text with options embedded as (A), (B), (C), (D)
+Now includes conversion of numeric questions to MCQ format.
 """
 
-import re
-from typing import Generator, Dict, Any, Optional, Tuple
+from typing import Generator, Dict, Any, Optional
 from datasets import load_dataset
 
 from ingestion.loaders.base import BaseLoader, RawQuestion
+
+
+# Mapping from JEEBench topics to our taxonomy
+TOPIC_MAPPING = {
+    # Physics
+    "mechanics": ("physics", "mechanics", "general_mechanics"),
+    "kinematics": ("physics", "mechanics", "kinematics"),
+    "laws of motion": ("physics", "mechanics", "newtons_laws"),
+    "work energy power": ("physics", "mechanics", "work_energy_power"),
+    "rotational motion": ("physics", "mechanics", "rotational_mechanics"),
+    "gravitation": ("physics", "mechanics", "gravitation"),
+    "properties of matter": ("physics", "mechanics", "properties_of_matter"),
+    "oscillations": ("physics", "waves", "simple_harmonic_motion"),
+    "waves": ("physics", "waves", "wave_motion"),
+    "heat and thermodynamics": ("physics", "thermodynamics", "heat_transfer"),
+    "thermodynamics": ("physics", "thermodynamics", "laws_of_thermodynamics"),
+    "electrostatics": ("physics", "electromagnetism", "electrostatics"),
+    "current electricity": ("physics", "electromagnetism", "current_electricity"),
+    "magnetic effects": ("physics", "electromagnetism", "magnetic_effects"),
+    "electromagnetic induction": ("physics", "electromagnetism", "electromagnetic_induction"),
+    "optics": ("physics", "optics", "ray_optics"),
+    "modern physics": ("physics", "modern_physics", "photoelectric_effect"),
+    "semiconductors": ("physics", "modern_physics", "semiconductors"),
+    # Chemistry
+    "atomic structure": ("chemistry", "physical_chemistry", "atomic_structure"),
+    "chemical bonding": ("chemistry", "inorganic_chemistry", "chemical_bonding"),
+    "states of matter": ("chemistry", "physical_chemistry", "states_of_matter"),
+    "thermochemistry": ("chemistry", "physical_chemistry", "thermochemistry"),
+    "equilibrium": ("chemistry", "physical_chemistry", "chemical_equilibrium"),
+    "ionic equilibrium": ("chemistry", "physical_chemistry", "ionic_equilibrium"),
+    "electrochemistry": ("chemistry", "physical_chemistry", "electrochemistry"),
+    "chemical kinetics": ("chemistry", "physical_chemistry", "chemical_kinetics"),
+    "solutions": ("chemistry", "physical_chemistry", "solutions"),
+    "surface chemistry": ("chemistry", "physical_chemistry", "surface_chemistry"),
+    "periodic table": ("chemistry", "inorganic_chemistry", "periodic_table"),
+    "coordination compounds": ("chemistry", "inorganic_chemistry", "coordination_compounds"),
+    "metallurgy": ("chemistry", "inorganic_chemistry", "metallurgy"),
+    "organic chemistry": ("chemistry", "organic_chemistry", "general_organic"),
+    "hydrocarbons": ("chemistry", "organic_chemistry", "hydrocarbons"),
+    "organic compounds": ("chemistry", "organic_chemistry", "functional_groups"),
+    "polymers": ("chemistry", "organic_chemistry", "polymers"),
+    "biomolecules": ("chemistry", "organic_chemistry", "biomolecules"),
+    # Mathematics
+    "algebra": ("mathematics", "algebra", "general_algebra"),
+    "quadratic equations": ("mathematics", "algebra", "quadratic_equations"),
+    "complex numbers": ("mathematics", "algebra", "complex_numbers"),
+    "matrices": ("mathematics", "algebra", "matrices_determinants"),
+    "determinants": ("mathematics", "algebra", "matrices_determinants"),
+    "permutations": ("mathematics", "algebra", "permutations_combinations"),
+    "binomial theorem": ("mathematics", "algebra", "binomial_theorem"),
+    "sequences": ("mathematics", "algebra", "sequences_series"),
+    "calculus": ("mathematics", "calculus", "general_calculus"),
+    "limits": ("mathematics", "calculus", "limits_continuity"),
+    "differentiation": ("mathematics", "calculus", "differentiation"),
+    "integration": ("mathematics", "calculus", "integration"),
+    "differential equations": ("mathematics", "calculus", "differential_equations"),
+    "coordinate geometry": ("mathematics", "coordinate_geometry", "straight_lines"),
+    "straight lines": ("mathematics", "coordinate_geometry", "straight_lines"),
+    "circles": ("mathematics", "coordinate_geometry", "circles"),
+    "conic sections": ("mathematics", "coordinate_geometry", "conic_sections"),
+    "vectors": ("mathematics", "vectors_3d", "vectors"),
+    "3d geometry": ("mathematics", "vectors_3d", "three_dimensional_geometry"),
+    "trigonometry": ("mathematics", "trigonometry", "trigonometric_functions"),
+    "probability": ("mathematics", "probability_statistics", "probability"),
+    "statistics": ("mathematics", "probability_statistics", "statistics"),
+}
+
+
+async def convert_numeric_to_mcq(question_text: str, answer: str, topic: str) -> Optional[Dict]:
+    """
+    Convert a numeric/integer answer question to MCQ format using LLM.
+
+    Args:
+        question_text: The question
+        answer: The numeric answer
+        topic: Topic for context
+
+    Returns:
+        Dict with option_a, option_b, option_c, option_d, correct_option
+    """
+    from app.services.llm import generate_json_response
+
+    prompt = f"""Convert this numeric-answer JEE question to MCQ format.
+
+Question: {question_text}
+Correct Answer: {answer}
+Topic: {topic}
+
+Create 4 options where:
+- One option is the correct answer ({answer})
+- Three options are plausible wrong answers (common mistakes students make)
+- Randomly place the correct answer among A, B, C, D
+
+Return JSON only:
+{{
+    "option_a": "...",
+    "option_b": "...",
+    "option_c": "...",
+    "option_d": "...",
+    "correct_option": "A/B/C/D",
+    "solution": "Brief explanation of how to solve this"
+}}"""
+
+    try:
+        result = await generate_json_response(prompt, model="gpt-4o-mini")
+        if result and all(k in result for k in ["option_a", "option_b", "option_c", "option_d", "correct_option"]):
+            return result
+    except Exception as e:
+        print(f"⚠️ Failed to convert numeric question: {e}")
+
+    return None
 
 
 class JEEBenchLoader(BaseLoader):
     """
     Loader for JEEBench dataset from HuggingFace.
 
-    The dataset contains JEE Advanced questions with options embedded in text.
+    Now handles:
+    - Standard MCQ questions
+    - Integer/numeric type questions (converts to MCQ)
     """
 
     name = "jeebench"
 
-    def __init__(self, subset: str = None):
+    def __init__(self, subset: str = None, convert_numeric: bool = False):
         """
         Initialize loader.
 
         Args:
-            subset: Optional subject filter ("phy", "chem", "math", "physics", etc.)
+            subset: Optional subject filter ("phy", "chem", "math")
+            convert_numeric: If True, convert numeric questions to MCQ (slower, uses LLM)
         """
         self.subset = subset
+        self.convert_numeric = convert_numeric
         self.dataset = None
 
     def _load_dataset(self):
         """Load the dataset from HuggingFace."""
         if self.dataset is None:
-            print("Loading JEEBench dataset from HuggingFace...")
+            print("📥 Loading JEEBench dataset from HuggingFace...")
             self.dataset = load_dataset("daman1209arora/jeebench", split="test")
             print(f"   Loaded {len(self.dataset)} questions")
 
-    def _parse_options_from_text(self, question_text: str) -> Tuple[str, str, str, str, str]:
-        """
-        Extract question stem and options from the full question text.
+    def _map_topic(self, topic_str: str, subject: str) -> tuple:
+        """Map JEEBench topic to our taxonomy."""
+        topic_lower = topic_str.lower().strip()
 
-        JEEBench format has options embedded like:
-        (A) option text
-        (B) option text
-        ...
+        if topic_lower in TOPIC_MAPPING:
+            return TOPIC_MAPPING[topic_lower]
 
-        Returns:
-            (question_stem, option_a, option_b, option_c, option_d)
-        """
-        # Pattern to match options: (A), (B), (C), (D)
-        # Also handles \n(A), variations with $ for LaTeX
-        pattern = r'\(([ABCD])\)\s*'
+        for key, value in TOPIC_MAPPING.items():
+            if key in topic_lower or topic_lower in key:
+                return value
 
-        # Find all option positions
-        matches = list(re.finditer(pattern, question_text))
+        subject_lower = self.normalize_subject(subject)
 
-        if len(matches) < 4:
-            # Fallback: return full text as question, empty options
-            return question_text, "", "", "", ""
-
-        # Extract question stem (everything before first option)
-        question_stem = question_text[:matches[0].start()].strip()
-
-        # Extract each option
-        options = {}
-        for i, match in enumerate(matches):
-            option_letter = match.group(1)
-            start = match.end()
-
-            # End is either next option or end of string
-            if i + 1 < len(matches):
-                end = matches[i + 1].start()
-            else:
-                end = len(question_text)
-
-            option_text = question_text[start:end].strip()
-            options[option_letter] = option_text
-
-        return (
-            question_stem,
-            options.get("A", ""),
-            options.get("B", ""),
-            options.get("C", ""),
-            options.get("D", "")
-        )
-
-    def _extract_year_from_description(self, description: str) -> Optional[int]:
-        """Extract year from description like 'JEE Adv 2016 Paper 1'."""
-        match = re.search(r'20\d{2}', description)
-        if match:
-            return int(match.group())
-        return None
-
-    def _map_subject(self, subject_code: str) -> str:
-        """Map subject code to full name."""
-        mapping = {
-            "phy": "physics",
-            "chem": "chemistry",
-            "math": "mathematics",
-        }
-        return mapping.get(subject_code.lower(), "physics")
-
-    def _get_chapter_topic(self, subject: str) -> Tuple[str, str]:
-        """Get default chapter and topic based on subject."""
         defaults = {
-            "physics": ("mechanics", "general"),
-            "chemistry": ("physical_chemistry", "general"),
-            "mathematics": ("algebra", "general"),
+            "physics": ("physics", "mechanics", "general_mechanics"),
+            "chemistry": ("chemistry", "physical_chemistry", "general"),
+            "mathematics": ("mathematics", "algebra", "general_algebra"),
         }
-        return defaults.get(subject, ("general", "general"))
 
-    def _parse_question(self, row: Dict[str, Any]) -> RawQuestion:
+        return defaults.get(subject_lower, ("physics", "mechanics", "general"))
+
+    def _is_numeric_question(self, row: Dict) -> bool:
+        """Check if question is numeric/integer type."""
+        options = row.get("options", [])
+        answer = row.get("answer", "")
+
+        # No options = likely numeric
+        if not options or len(options) < 4:
+            return True
+
+        # Answer is a number
+        try:
+            float(str(answer).strip())
+            if len(options) < 4:
+                return True
+        except:
+            pass
+
+        return False
+
+    def _parse_question(self, row: Dict[str, Any]) -> Optional[RawQuestion]:
         """Parse a single row into RawQuestion format."""
 
-        # Get full question text and parse it
-        full_text = row.get("question", "")
-        question_stem, opt_a, opt_b, opt_c, opt_d = self._parse_options_from_text(full_text)
+        subject_raw = row.get("subject", "physics")
+        topic_raw = row.get("topic", "")
 
-        # Get subject
-        subject_code = row.get("subject", "phy")
-        subject = self._map_subject(subject_code)
+        subject, chapter, topic = self._map_topic(topic_raw, subject_raw)
 
-        # Get chapter and topic (JEEBench doesn't provide these, use defaults)
-        chapter, topic = self._get_chapter_topic(subject)
+        # Parse options
+        options = row.get("options", [])
 
-        # Get correct answer
-        correct_option = row.get("gold", "A").upper()
-        if correct_option not in ["A", "B", "C", "D"]:
-            correct_option = "A"
+        if isinstance(options, list) and len(options) >= 4:
+            option_a = str(options[0])
+            option_b = str(options[1])
+            option_c = str(options[2])
+            option_d = str(options[3])
+        else:
+            option_a = str(row.get("option_a", row.get("A", "")))
+            option_b = str(row.get("option_b", row.get("B", "")))
+            option_c = str(row.get("option_c", row.get("C", "")))
+            option_d = str(row.get("option_d", row.get("D", "")))
 
-        # Extract year from description
-        description = row.get("description", "")
-        year = self._extract_year_from_description(description)
+        # Parse correct answer
+        correct = row.get("answer", row.get("correct_option", "A"))
+        correct_option = self.normalize_option(str(correct))
 
-        # Get question index as source ID
-        source_id = str(row.get("index", ""))
+        solution = row.get("solution", row.get("explanation", ""))
+        difficulty = row.get("difficulty", 3)
 
         return RawQuestion(
-            question_text=question_stem,
-            option_a=opt_a,
-            option_b=opt_b,
-            option_c=opt_c,
-            option_d=opt_d,
+            question_text=str(row.get("question", row.get("problem", ""))),
+            option_a=option_a,
+            option_b=option_b,
+            option_c=option_c,
+            option_d=option_d,
             correct_option=correct_option,
             subject=subject,
             chapter=chapter,
             topic=topic,
-            difficulty=3,  # JEE Advanced = medium-hard
+            difficulty=difficulty,
             source="JEEBench",
-            source_id=source_id,
-            year=year,
+            source_id=str(row.get("id", "")),
+            year=row.get("year"),
             is_pyq=True,
-            solution="",  # JEEBench doesn't include solutions
+            solution=str(solution) if solution else "",
+        )
+
+    async def _parse_numeric_question(self, row: Dict[str, Any]) -> Optional[RawQuestion]:
+        """Parse a numeric question by converting to MCQ."""
+        subject_raw = row.get("subject", "physics")
+        topic_raw = row.get("topic", "")
+
+        subject, chapter, topic = self._map_topic(topic_raw, subject_raw)
+
+        question_text = str(row.get("question", row.get("problem", "")))
+        answer = str(row.get("answer", ""))
+
+        # Convert to MCQ using LLM
+        mcq_data = await convert_numeric_to_mcq(question_text, answer, topic)
+
+        if not mcq_data:
+            return None
+
+        return RawQuestion(
+            question_text=question_text,
+            option_a=mcq_data["option_a"],
+            option_b=mcq_data["option_b"],
+            option_c=mcq_data["option_c"],
+            option_d=mcq_data["option_d"],
+            correct_option=mcq_data["correct_option"],
+            subject=subject,
+            chapter=chapter,
+            topic=topic,
+            difficulty=row.get("difficulty", 3),
+            source="JEEBench_Converted",
+            source_id=str(row.get("id", "")),
+            year=row.get("year"),
+            is_pyq=True,
+            solution=mcq_data.get("solution", ""),
         )
 
     def load(self) -> Generator[RawQuestion, None, None]:
-        """
-        Load and yield questions from JEEBench.
-
-        Yields:
-            RawQuestion objects
-        """
+        """Load and yield MCQ questions from JEEBench."""
         self._load_dataset()
 
         loaded = 0
@@ -178,40 +282,66 @@ class JEEBenchLoader(BaseLoader):
 
         for row in self.dataset:
             try:
-                # Filter by type - only MCQ for now
-                q_type = row.get("type", "MCQ")
-                if q_type != "MCQ":
+                if self.subset:
+                    row_subject = row.get("subject", "").lower()
+                    if self.subset.lower() not in row_subject:
+                        continue
+
+                # Skip numeric questions in sync mode
+                if self._is_numeric_question(row):
                     skipped += 1
                     continue
 
-                # Filter by subset if specified
-                if self.subset:
-                    row_subject = row.get("subject", "").lower()
-                    subset_lower = self.subset.lower()
-
-                    # Handle both short and long forms
-                    if subset_lower in ["physics", "phy"]:
-                        if row_subject != "phy":
-                            continue
-                    elif subset_lower in ["chemistry", "chem"]:
-                        if row_subject != "chem":
-                            continue
-                    elif subset_lower in ["mathematics", "math", "maths"]:
-                        if row_subject != "math":
-                            continue
-
                 question = self._parse_question(row)
 
-                # Validate
-                if self.validate_question(question):
+                if question and self.validate_question(question):
                     loaded += 1
                     yield question
                 else:
                     skipped += 1
 
             except Exception as e:
-                print(f"Error parsing question: {e}")
+                print(f"⚠️ Error parsing question: {e}")
                 skipped += 1
                 continue
 
-        print(f"JEEBench: Loaded {loaded}, Skipped {skipped}")
+        print(f"✅ JEEBench: Loaded {loaded}, Skipped {skipped}")
+
+    async def load_with_conversion(self) -> Generator[RawQuestion, None, None]:
+        """Load ALL questions, converting numeric ones to MCQ."""
+        self._load_dataset()
+
+        loaded = 0
+        converted = 0
+        skipped = 0
+
+        for row in self.dataset:
+            try:
+                if self.subset:
+                    row_subject = row.get("subject", "").lower()
+                    if self.subset.lower() not in row_subject:
+                        continue
+
+                if self._is_numeric_question(row):
+                    # Convert numeric to MCQ
+                    question = await self._parse_numeric_question(row)
+                    if question and self.validate_question(question):
+                        converted += 1
+                        yield question
+                    else:
+                        skipped += 1
+                else:
+                    # Standard MCQ
+                    question = self._parse_question(row)
+                    if question and self.validate_question(question):
+                        loaded += 1
+                        yield question
+                    else:
+                        skipped += 1
+
+            except Exception as e:
+                print(f"⚠️ Error: {e}")
+                skipped += 1
+                continue
+
+        print(f"✅ JEEBench: Loaded {loaded}, Converted {converted}, Skipped {skipped}")

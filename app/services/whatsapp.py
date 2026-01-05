@@ -302,34 +302,101 @@ def parse_gupshup_webhook(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Parse incoming Gupshup webhook payload.
 
-    Gupshup sends various event types. We only care about actual messages.
+    Handles Meta Cloud API format (v3) which Gupshup now uses.
 
     Args:
         payload: Raw webhook JSON from Gupshup
 
     Returns:
         Parsed message dict, or None if not a user message
-
-    Message types handled:
-        - text: Regular text message
-        - image: Photo (e.g., test paper photo)
-        - button: User clicked a button
-        - quick_reply: User tapped a quick reply
     """
     try:
-        # Check if this is a message event
+        # Meta Cloud API v3 format
+        if payload.get("object") == "whatsapp_business_account":
+            entries = payload.get("entry", [])
+
+            if not entries:
+                return None
+
+            for entry in entries:
+                changes = entry.get("changes", [])
+
+                for change in changes:
+                    if change.get("field") != "messages":
+                        continue
+
+                    value = change.get("value", {})
+                    messages = value.get("messages", [])
+                    contacts = value.get("contacts", [])
+
+                    if not messages:
+                        # Could be a status update, not a message
+                        return None
+
+                    # Get first message
+                    msg = messages[0]
+
+                    # Get contact name if available
+                    contact_name = None
+                    if contacts:
+                        contact_name = contacts[0].get("profile", {}).get("name")
+
+                    result = {
+                        "message_id": msg.get("id"),
+                        "phone_number": msg.get("from"),
+                        "timestamp": msg.get("timestamp"),
+                        "type": msg.get("type", "text"),
+                        "text": None,
+                        "image_url": None,
+                        "button_id": None,
+                        "button_text": None,
+                        "contact_name": contact_name,
+                    }
+
+                    msg_type = msg.get("type")
+
+                    # Parse based on message type
+                    if msg_type == "text":
+                        result["text"] = msg.get("text", {}).get("body", "")
+
+                    elif msg_type == "image":
+                        result["image_url"] = msg.get("image", {}).get("url", "")
+                        result["text"] = msg.get("image", {}).get("caption", "")
+
+                    elif msg_type == "button":
+                        result["button_text"] = msg.get("button", {}).get("text", "")
+                        result["text"] = result["button_text"]
+
+                    elif msg_type == "interactive":
+                        # Handle button replies
+                        interactive = msg.get("interactive", {})
+                        if interactive.get("type") == "button_reply":
+                            result["button_id"] = interactive.get("button_reply", {}).get("id", "")
+                            result["button_text"] = interactive.get("button_reply", {}).get("title", "")
+                            result["text"] = result["button_text"]
+
+                    # Validate we have minimum required fields
+                    if not result["phone_number"]:
+                        print(f"⚠️ Missing phone number in webhook")
+                        return None
+
+                    print(f"📱 Parsed message from {result['phone_number']}: {result.get('text', '[no text]')[:50]}")
+                    return result
+
+            return None
+
+        # Legacy Gupshup format (fallback)
         event_type = payload.get("type")
 
         if event_type != "message":
-            # Could be: message-event (delivery/read receipts), etc.
             return None
 
         message_payload = payload.get("payload", {})
         msg_type = message_payload.get("type", "text")
 
-        result: Dict[str, Any] = {
+        result = {
             "message_id": message_payload.get("id"),
-            "phone_number": message_payload.get("source"),  # Sender's number
+            "phone_number": message_payload.get("source"),
             "timestamp": payload.get("timestamp"),
             "type": msg_type,
             "text": None,
@@ -338,33 +405,21 @@ def parse_gupshup_webhook(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "button_text": None,
         }
 
-        # Parse based on message type
         if msg_type == "text":
             result["text"] = message_payload.get("payload", {}).get("text", "")
-
         elif msg_type == "image":
             result["image_url"] = message_payload.get("payload", {}).get("url", "")
             result["text"] = message_payload.get("payload", {}).get("caption", "")
 
-        elif msg_type == "button":
-            # User clicked an interactive button
-            result["button_id"] = message_payload.get("payload", {}).get("id", "")
-            result["button_text"] = message_payload.get("payload", {}).get("title", "")
-            result["text"] = result["button_text"]  # Treat as text for processing
-
-        elif msg_type == "quick_reply":
-            result["text"] = message_payload.get("payload", {}).get("text", "")
-
-        # Validate we have minimum required fields
         if not result["phone_number"]:
-            print(f"⚠️ Missing phone number in webhook: {payload}")
             return None
 
         return result
 
     except Exception as e:
-        print(f"❌ Error parsing Gupshup webhook: {e}")
-        print(f"   Payload: {payload}")
+        print(f"❌ Error parsing webhook: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
